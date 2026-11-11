@@ -3,12 +3,59 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-
+import { randomBytes, createCipheriv, createDecipheriv, createHmac, timingSafeEqual } from 'crypto';
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+function encryptToken(token: string): string {
+  const keyHex = process.env.TOKEN_ENCRYPTION_KEY;
 
+  if (!keyHex || !/^[0-9a-fA-F]{64}$/.test(keyHex)) {
+    throw new Error('TOKEN_ENCRYPTION_KEY must be a 64-character hex key');
+  }
+
+  const key = Buffer.from(keyHex, 'hex');
+  const iv = randomBytes(12);
+
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(token, 'utf8'),
+    cipher.final()
+  ]);
+
+  return JSON.stringify({
+    iv: iv.toString('hex'),
+    tag: cipher.getAuthTag().toString('hex'),
+    data: encrypted.toString('hex')
+  });
+}
+
+function decryptToken(encryptedToken: string): string {
+  const keyHex = process.env.TOKEN_ENCRYPTION_KEY;
+
+  if (!keyHex || !/^[0-9a-fA-F]{64}$/.test(keyHex)) {
+    throw new Error('TOKEN_ENCRYPTION_KEY must be a 64-character hex key');
+  }
+
+  const key = Buffer.from(keyHex, 'hex');
+  const stored = JSON.parse(encryptedToken);
+
+  const decipher = createDecipheriv(
+    'aes-256-gcm',
+    key,
+    Buffer.from(stored.iv, 'hex')
+  );
+
+  decipher.setAuthTag(Buffer.from(stored.tag, 'hex'));
+
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(stored.data, 'hex')),
+    decipher.final()
+  ]);
+
+  return decrypted.toString('utf8');
+}
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const isProduction = process.env.NODE_ENV === 'production';
@@ -415,6 +462,478 @@ Return strictly valid JSON array of 5 objects.`;
 
   return res.json({ opportunities: fallbackOpportunities, source: 'creator-engine-fallback' });
 });
+
+
+// -------------------- YouTube OAuth + Supabase --------------------
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || '';
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || '';
+
+const OAUTH_STATE_COOKIE = 'cp_youtube_oauth_state';
+const SESSION_COOKIE = 'cp_youtube_session';
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+
+function getCookie(req: Request, name: string): string | undefined {
+  const cookieHeader = req.headers.cookie || '';
+  const entry = cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${name}=`));
+
+  if (!entry) return undefined;
+
+  try {
+    return decodeURIComponent(entry.slice(name.length + 1));
+  } catch {
+    return undefined;
+  }
+}
+
+function cookieOptions(maxAgeSeconds: number): string {
+  return `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+}
+
+function clearCookie(res: Response, name: string): void {
+  res.append('Set-Cookie', `${name}=; ${cookieOptions(0)}`);
+}
+
+function createSessionCookie(payload: {
+  googleUserId: string;
+  channelId: string;
+  channelTitle: string;
+}): string {
+  const keyHex = process.env.TOKEN_ENCRYPTION_KEY;
+  if (!keyHex || !/^[0-9a-fA-F]{64}$/.test(keyHex)) {
+    throw new Error('TOKEN_ENCRYPTION_KEY is not configured correctly');
+  }
+
+  const body = Buffer.from(JSON.stringify({
+    ...payload,
+    expiresAt: Date.now() + SESSION_MAX_AGE_SECONDS * 1000,
+  })).toString('base64url');
+
+  const signature = createHmac('sha256', Buffer.from(keyHex, 'hex'))
+    .update(body)
+    .digest('hex');
+
+  return `${body}.${signature}`;
+}
+
+function readSession(req: Request): {
+  googleUserId: string;
+  channelId: string;
+  channelTitle: string;
+} | null {
+  const token = getCookie(req, SESSION_COOKIE);
+  const keyHex = process.env.TOKEN_ENCRYPTION_KEY;
+
+  if (!token || !keyHex || !/^[0-9a-fA-F]{64}$/.test(keyHex)) return null;
+
+  const separator = token.lastIndexOf('.');
+  if (separator < 1) return null;
+
+  const body = token.slice(0, separator);
+  const suppliedSignature = token.slice(separator + 1);
+  if (!/^[0-9a-f]{64}$/i.test(suppliedSignature)) return null;
+
+  const expectedSignature = createHmac('sha256', Buffer.from(keyHex, 'hex'))
+    .update(body)
+    .digest();
+
+  const actualSignature = Buffer.from(suppliedSignature, 'hex');
+  if (
+    actualSignature.length !== expectedSignature.length ||
+    !timingSafeEqual(actualSignature, expectedSignature)
+  ) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (
+      !payload.googleUserId ||
+      !payload.channelId ||
+      !payload.channelTitle ||
+      typeof payload.expiresAt !== 'number' ||
+      payload.expiresAt < Date.now()
+    ) {
+      return null;
+    }
+
+    return {
+      googleUserId: payload.googleUserId,
+      channelId: payload.channelId,
+      channelTitle: payload.channelTitle,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function requireYouTubeConfig(): void {
+  const missing: string[] = [];
+
+  if (!GOOGLE_CLIENT_ID) missing.push('GOOGLE_CLIENT_ID');
+  if (!GOOGLE_CLIENT_SECRET) missing.push('GOOGLE_CLIENT_SECRET');
+  if (!GOOGLE_REDIRECT_URI) missing.push('GOOGLE_REDIRECT_URI');
+  if (!SUPABASE_URL) missing.push('SUPABASE_URL');
+  if (!SUPABASE_SECRET_KEY) missing.push('SUPABASE_SECRET_KEY');
+  if (!process.env.TOKEN_ENCRYPTION_KEY) missing.push('TOKEN_ENCRYPTION_KEY');
+
+  if (missing.length) {
+    throw new Error(`Missing server environment variables: ${missing.join(', ')}`);
+  }
+}
+
+async function supabaseRequest(
+  tablePath: string,
+  init: RequestInit = {}
+): Promise<globalThis.Response> {
+  requireYouTubeConfig();
+
+  return fetch(`${SUPABASE_URL}/rest/v1/${tablePath}`, {
+    ...init,
+    headers: {
+      apikey: SUPABASE_SECRET_KEY,
+      // New Supabase sb_secret_ keys are API keys, not JWTs. Older service_role
+      // keys are JWTs and can also be sent as the Authorization bearer token.
+      ...(SUPABASE_SECRET_KEY.startsWith('sb_secret_')
+        ? {}
+        : { Authorization: `Bearer ${SUPABASE_SECRET_KEY}` }),
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+    },
+  });
+}
+
+async function getStoredConnection(googleUserId: string): Promise<any | null> {
+  const query = `youtube_connections?select=google_user_id,channel_id,channel_title,refresh_token_encrypted,scopes&google_user_id=eq.${encodeURIComponent(googleUserId)}&limit=1`;
+  const response = await supabaseRequest(query);
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Supabase read failed (${response.status}): ${detail}`);
+  }
+
+  const rows = await response.json() as any[];
+  return rows[0] || null;
+}
+
+async function refreshGoogleAccessToken(refreshToken: string): Promise<string> {
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    }),
+  });
+
+  const data = await response.json() as any;
+  if (!response.ok || !data.access_token) {
+    throw new Error(data.error_description || data.error || 'Google token refresh failed');
+  }
+
+  return data.access_token as string;
+}
+
+// Start Google consent flow.
+app.get('/api/youtube/connect', (req: Request, res: Response) => {
+  try {
+    requireYouTubeConfig();
+
+    const state = randomBytes(32).toString('hex');
+    res.append(
+      'Set-Cookie',
+      `${OAUTH_STATE_COOKIE}=${encodeURIComponent(state)}; ${cookieOptions(10 * 60)}`
+    );
+
+    const scopes = [
+      'openid',
+      'email',
+      'profile',
+      'https://www.googleapis.com/auth/youtube.readonly',
+      'https://www.googleapis.com/auth/yt-analytics.readonly',
+    ];
+
+    const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authorizationUrl.search = new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      redirect_uri: GOOGLE_REDIRECT_URI,
+      response_type: 'code',
+      scope: scopes.join(' '),
+      access_type: 'offline',
+      prompt: 'consent',
+      include_granted_scopes: 'true',
+      state,
+    }).toString();
+
+    return res.redirect(authorizationUrl.toString());
+  } catch (error: any) {
+    console.error('YouTube connect setup failed:', error?.message || error);
+    return res.status(500).send('YouTube connection is not configured. Check the server environment variables.');
+  }
+});
+
+// Google sends the browser back here after consent.
+app.get('/api/youtube/callback', async (req: Request, res: Response) => {
+  try {
+    requireYouTubeConfig();
+
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const returnedState = typeof req.query.state === 'string' ? req.query.state : '';
+    const savedState = getCookie(req, OAUTH_STATE_COOKIE);
+
+    clearCookie(res, OAUTH_STATE_COOKIE);
+
+    if (!code || !returnedState || !savedState || returnedState !== savedState) {
+      return res.status(400).send('Google authorization could not be verified. Please try connecting again.');
+    }
+
+    if (req.query.error) {
+      return res.redirect('/?youtube=cancelled');
+    }
+
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: GOOGLE_REDIRECT_URI,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    const tokenData = await tokenResponse.json() as any;
+    if (!tokenResponse.ok || !tokenData.access_token) {
+      console.error('Google token exchange failed:', tokenData.error_description || tokenData.error);
+      return res.status(502).send('Google sign-in failed while exchanging the authorization code. Please try again.');
+    }
+
+    // A refresh token is needed so the app can access analytics after the user leaves.
+    if (!tokenData.refresh_token) {
+      return res.status(400).send('Google did not return a refresh token. Revoke CreatorPulse AI access in your Google Account, then connect again.');
+    }
+
+    const identityResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const identity = await identityResponse.json() as any;
+
+    if (!identityResponse.ok || !identity.sub) {
+      return res.status(502).send('Google account identity could not be verified.');
+    }
+
+    const channelResponse = await fetch(
+      'https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true',
+      { headers: { Authorization: `Bearer ${tokenData.access_token}` } }
+    );
+    const channelData = await channelResponse.json() as any;
+
+    if (!channelResponse.ok) {
+      console.error('YouTube channel lookup failed:', channelData.error?.message || channelData);
+      return res.status(502).send('YouTube could not return a channel for this Google account. Make sure the account has a YouTube channel.');
+    }
+
+    const channel = channelData.items?.[0];
+    if (!channel?.id) {
+      return res.status(404).send('No YouTube channel was found for this Google account.');
+    }
+
+    const encryptedRefreshToken = encryptToken(tokenData.refresh_token);
+    const scopes = typeof tokenData.scope === 'string' ? tokenData.scope.split(' ') : [];
+
+    const saveResponse = await supabaseRequest(
+      'youtube_connections?on_conflict=google_user_id',
+      {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({
+          google_user_id: identity.sub,
+          channel_id: channel.id,
+          channel_title: channel.snippet?.title || 'YouTube Channel',
+          refresh_token_encrypted: encryptedRefreshToken,
+          scopes,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    if (!saveResponse.ok) {
+      const detail = await saveResponse.text();
+      console.error('Supabase connection save failed:', saveResponse.status, detail);
+      return res.status(502).send('Your YouTube channel was found, but CreatorPulse could not save the secure connection. Check the Supabase table and server logs.');
+    }
+
+    const sessionCookie = createSessionCookie({
+      googleUserId: identity.sub,
+      channelId: channel.id,
+      channelTitle: channel.snippet?.title || 'YouTube Channel',
+    });
+
+    res.append(
+      'Set-Cookie',
+      `${SESSION_COOKIE}=${encodeURIComponent(sessionCookie)}; ${cookieOptions(SESSION_MAX_AGE_SECONDS)}`
+    );
+
+    return res.redirect('/?youtube=connected');
+  } catch (error: any) {
+    console.error('YouTube OAuth callback failed:', error?.message || error);
+    return res.status(500).send('Something went wrong while connecting YouTube. Check the Render logs for details.');
+  }
+});
+
+// Safe connection status; never returns OAuth tokens or secrets.
+app.get('/api/youtube/status', (req: Request, res: Response) => {
+  const session = readSession(req);
+
+  if (!session) {
+    return res.json({ connected: false });
+  }
+
+  return res.json({
+    connected: true,
+    channelId: session.channelId,
+    channelTitle: session.channelTitle,
+  });
+});
+
+// Fetch the connected channel's current public channel statistics.
+app.get('/api/youtube/channel', async (req: Request, res: Response) => {
+  try {
+    const session = readSession(req);
+    if (!session) return res.status(401).json({ error: 'YouTube is not connected' });
+
+    const connection = await getStoredConnection(session.googleUserId);
+    if (!connection) return res.status(404).json({ error: 'YouTube connection was not found' });
+
+    const refreshToken = decryptToken(connection.refresh_token_encrypted);
+    const accessToken = await refreshGoogleAccessToken(refreshToken);
+
+    const response = await fetch(
+      `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id=${encodeURIComponent(session.channelId)}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    const data = await response.json() as any;
+
+    if (!response.ok) {
+      return res.status(502).json({ error: data.error?.message || 'YouTube channel request failed' });
+    }
+
+    const channel = data.items?.[0];
+    if (!channel) return res.status(404).json({ error: 'YouTube channel was not found' });
+
+    return res.json({
+      channel: {
+        id: channel.id,
+        title: channel.snippet?.title || '',
+        description: channel.snippet?.description || '',
+        customUrl: channel.snippet?.customUrl || '',
+        thumbnail: channel.snippet?.thumbnails?.high?.url ||
+          channel.snippet?.thumbnails?.default?.url || '',
+        publishedAt: channel.snippet?.publishedAt || null,
+        subscriberCount: channel.statistics?.hiddenSubscriberCount
+          ? null
+          : Number(channel.statistics?.subscriberCount || 0),
+        viewCount: Number(channel.statistics?.viewCount || 0),
+        videoCount: Number(channel.statistics?.videoCount || 0),
+        hiddenSubscriberCount: Boolean(channel.statistics?.hiddenSubscriberCount),
+      },
+    });
+  } catch (error: any) {
+    console.error('YouTube channel request failed:', error?.message || error);
+    return res.status(500).json({ error: 'Could not load YouTube channel data' });
+  }
+});
+
+// Private channel analytics for the last 28 days (when YouTube has data).
+app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
+  try {
+    const session = readSession(req);
+    if (!session) return res.status(401).json({ error: 'YouTube is not connected' });
+
+    const connection = await getStoredConnection(session.googleUserId);
+    if (!connection) return res.status(404).json({ error: 'YouTube connection was not found' });
+
+    const refreshToken = decryptToken(connection.refresh_token_encrypted);
+    const accessToken = await refreshGoogleAccessToken(refreshToken);
+
+    const endDate = new Date();
+    endDate.setUTCDate(endDate.getUTCDate() - 2); // Analytics data can be delayed.
+    const startDate = new Date(endDate);
+    startDate.setUTCDate(startDate.getUTCDate() - 27);
+
+    const formatDate = (date: Date) => date.toISOString().slice(0, 10);
+    const params = new URLSearchParams({
+      ids: 'channel==MINE',
+      startDate: formatDate(startDate),
+      endDate: formatDate(endDate),
+      metrics: 'views,estimatedMinutesWatched,averageViewDuration,subscribersGained,subscribersLost',
+      dimensions: 'day',
+      sort: 'day',
+    });
+
+    const response = await fetch(
+      `https://youtubeanalytics.googleapis.com/v2/reports?${params.toString()}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    const data = await response.json() as any;
+
+    if (!response.ok) {
+      console.error('YouTube Analytics request failed:', data.error?.message || data);
+      return res.status(502).json({
+        error: data.error?.message || 'YouTube Analytics request failed',
+      });
+    }
+
+    return res.json({
+      columnHeaders: data.columnHeaders || [],
+      rows: data.rows || [],
+      startDate: formatDate(startDate),
+      endDate: formatDate(endDate),
+      note: 'YouTube Analytics data may be delayed or unavailable for some channels and date ranges.',
+    });
+  } catch (error: any) {
+    console.error('YouTube Analytics request failed:', error?.message || error);
+    return res.status(500).json({ error: 'Could not load YouTube Analytics data' });
+  }
+});
+
+// Disconnect only the Google account represented by the signed, HttpOnly session.
+app.post('/api/youtube/disconnect', async (req: Request, res: Response) => {
+  try {
+    const session = readSession(req);
+    if (!session) {
+      clearCookie(res, SESSION_COOKIE);
+      return res.status(401).json({ error: 'YouTube is not connected' });
+    }
+
+    const response = await supabaseRequest(
+      `youtube_connections?google_user_id=eq.${encodeURIComponent(session.googleUserId)}`,
+      { method: 'DELETE' }
+    );
+
+    if (!response.ok) {
+      const detail = await response.text();
+      console.error('Supabase disconnect failed:', response.status, detail);
+      return res.status(502).json({ error: 'Could not remove the saved YouTube connection' });
+    }
+
+    clearCookie(res, SESSION_COOKIE);
+    return res.json({ connected: false });
+  } catch (error: any) {
+    console.error('YouTube disconnect failed:', error?.message || error);
+    return res.status(500).json({ error: 'Could not disconnect YouTube' });
+  }
+});
+
 
 // Setup Vite middlewares in development or static serve in production
 async function startServer() {
