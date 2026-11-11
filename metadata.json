@@ -1,0 +1,6 @@
+{
+  "name": "CreatorPulse AI - YouTube Analytics & Growth Platform",
+  "description": "Professional YouTube creator intelligence, predictive analytics, AI title and description generation, keyword explorer, thumbnail audits, and competitor benchmarking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
