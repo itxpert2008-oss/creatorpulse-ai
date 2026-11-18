@@ -1,3 +1,4 @@
+
 export type PageId =
   | 'dashboard'
   | 'video-research'
@@ -17,11 +18,11 @@ export interface VideoPerformance {
   viewsDeltaPercent: number;
   publishedDaysAgo: number;
   duration: string;
-  ctr: number; // e.g. 9.4%
-  retentionRate: number; // e.g. 54%
+  ctr: number;
+  retentionRate: number;
   likes: number;
   comments: number;
-  rank: number; // e.g. 1 out of 10
+  rank: number;
   tags: string[];
   status: 'breakout' | 'steady' | 'underperforming';
 }
@@ -51,7 +52,7 @@ export interface TrendingIdea {
   title: string;
   niche: string;
   potentialViews: string;
-  velocityScore: number; // 0-100
+  velocityScore: number;
   competitionLevel: 'Low' | 'Medium' | 'High';
   hookAngle: string;
   recommendedDuration: string;
@@ -82,9 +83,17 @@ export interface CompetitorChannel {
     multiplier: string;
     thumbnail: string;
   };
-  overlapScore: number; // 0-100
+  overlapScore: number;
   recentStrategy: string;
   contentGaps: string[];
+}
+
+export interface YouTubeAnalyticsSummary {
+  views: number;
+  estimatedMinutesWatched: number;
+  averageViewDurationSeconds: number;
+  subscribersGained: number;
+  subscribersLost: number;
 }
 
 export interface ChannelProfile {
@@ -103,8 +112,8 @@ export interface ChannelProfile {
   estimatedRevenue: string;
   avgCtr: number;
   avgAvd: string;
-  subscriberGrowthRate: number; // e.g. +14.2%
-  performanceScore: number; // 0-100
+  subscriberGrowthRate: number;
+  performanceScore: number;
   history: ChannelMetricHistory[];
   trafficSources: TrafficSource[];
   retentionCurve: RetentionPoint[];
@@ -112,6 +121,10 @@ export interface ChannelProfile {
   trendingIdeas: TrendingIdea[];
   recommendations: AIRecommendation[];
   competitors: CompetitorChannel[];
+
+  // Data source and real YouTube analytics
+  dataSource?: 'demo' | 'youtube';
+  analytics?: YouTubeAnalyticsSummary;
 }
 
 export interface TitleOption {
@@ -153,11 +166,11 @@ export interface KeywordMetric {
   keyword: string;
   searchVolume: number;
   searchVolumeDisplay: string;
-  competitionScore: number; // 0 - 100
+  competitionScore: number;
   competitionLabel: 'Low' | 'Medium' | 'High';
   difficulty: number;
   trend: '+18%' | '+34%' | '+5%' | '-2%' | '+88%';
-  opportunityScore: number; // 0 - 100
+  opportunityScore: number;
   cpcEstimate: string;
   topVideoTitle: string;
   topVideoViews: string;
