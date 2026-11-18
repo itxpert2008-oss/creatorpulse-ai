@@ -17,6 +17,14 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const app = express();
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const isProduction = process.env.NODE_ENV === 'production';
+
+app.use(express.json({ limit: '15mb' }));
+
+// -------------------- TOKEN ENCRYPTION --------------------
+
 function encryptToken(token: string): string {
   const keyHex = process.env.TOKEN_ENCRYPTION_KEY;
 
@@ -47,6 +55,7 @@ function decryptToken(encryptedToken: string): string {
   }
 
   const stored = JSON.parse(encryptedToken);
+
   const decipher = createDecipheriv(
     'aes-256-gcm',
     Buffer.from(keyHex, 'hex'),
@@ -63,15 +72,10 @@ function decryptToken(encryptedToken: string): string {
   return decrypted.toString('utf8');
 }
 
-const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-const isProduction = process.env.NODE_ENV === 'production';
-
-app.use(express.json({ limit: '15mb' }));
-
 // -------------------- GEMINI AI --------------------
 
 const apiKey = process.env.GEMINI_API_KEY || '';
+
 const hasGeminiKey = Boolean(
   apiKey.trim().length > 0 && apiKey !== 'MY_GEMINI_API_KEY'
 );
@@ -103,7 +107,8 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
-// 1. AI Title Generator
+// 1. AI TITLE GENERATOR
+
 app.post('/api/gemini/generate-titles', async (req: Request, res: Response) => {
   const { topic, niche, style, audience } = req.body;
 
@@ -112,25 +117,19 @@ app.post('/api/gemini/generate-titles', async (req: Request, res: Response) => {
   }
 
   const prompt = `
-Generate 6 compelling YouTube title options.
+You are a YouTube title strategist.
+
+Generate 6 compelling YouTube titles.
 
 Topic: "${topic}"
 Niche: "${niche || 'General YouTube'}"
 Style: "${style || 'Curiosity'}"
 Audience: "${audience || 'General Viewers'}"
 
-Return valid JSON array:
-[
-  {
-    "title": "string",
-    "predictedCtr": 0,
-    "hookType": "string",
-    "reasoning": "string",
-    "abTestVariation": "string"
-  }
-]
+Return a valid JSON array with:
+title, predictedCtr, hookType, reasoning, abTestVariation.
 
-Important: predictedCtr must be clearly labelled as an AI estimate, not actual measured CTR.
+Important: predictedCtr must be labelled as an AI estimate, not actual measured CTR.
 `;
 
   if (ai) {
@@ -144,7 +143,11 @@ Important: predictedCtr must be clearly labelled as an AI estimate, not actual m
       });
 
       const titles = JSON.parse(response.text || '[]');
-      return res.json({ titles, source: 'gemini-3.8-flash' });
+
+      return res.json({
+        titles,
+        source: 'gemini-3.8-flash',
+      });
     } catch (err: any) {
       console.error('Gemini title generation error:', err?.message || err);
     }
@@ -161,7 +164,7 @@ Important: predictedCtr must be clearly labelled as an AI estimate, not actual m
       abTestVariation: `The Truth About ${safeTopic}`,
     },
     {
-      title: `I Tested ${safeTopic.} Here Is What Happened`,
+      title: `I Tested ${safeTopic}. Here Is What Happened`,
       predictedCtr: null,
       hookType: 'Experiment',
       reasoning: 'Promises a practical demonstration.',
@@ -203,7 +206,8 @@ Important: predictedCtr must be clearly labelled as an AI estimate, not actual m
   });
 });
 
-// 2. AI Description Generator
+// 2. AI DESCRIPTION GENERATOR
+
 app.post('/api/gemini/generate-description', async (req: Request, res: Response) => {
   const { title, keyPoints, links, cta } = req.body;
 
@@ -220,8 +224,8 @@ Call to action: "${cta || 'Subscribe and comment'}"
 Links: "${links || 'No links supplied'}"
 
 Return JSON with:
-hook, summary, chapters, keyTakeaways, hashtags, seoTags,
-resourcesTemplate and fullFormattedText.
+hook, summary, chapters, keyTakeaways, hashtags,
+seoTags, resourcesTemplate and fullFormattedText.
 `;
 
   if (ai) {
@@ -235,7 +239,11 @@ resourcesTemplate and fullFormattedText.
       });
 
       const data = JSON.parse(response.text || '{}');
-      return res.json({ data, source: 'gemini-3.8-flash' });
+
+      return res.json({
+        data,
+        source: 'gemini-3.8-flash',
+      });
     } catch (err: any) {
       console.error('Gemini description error:', err?.message || err);
     }
@@ -253,7 +261,8 @@ resourcesTemplate and fullFormattedText.
     hashtags: ['#Technology', '#Tutorial', '#YouTube'],
     seoTags: ['technology tutorial', 'how to', 'step by step'],
     resourcesTemplate: links || '',
-    fullFormattedText: `Learn more about ${title}.\n\n${keyPoints || ''}\n\n${cta || 'Subscribe for more tutorials.'}\n\n#Technology #Tutorial`,
+    fullFormattedText:
+      `Learn more about ${title}.\n\n${keyPoints || ''}\n\n${cta || 'Subscribe for more tutorials.'}\n\n#Technology #Tutorial`,
   };
 
   return res.json({
@@ -262,7 +271,8 @@ resourcesTemplate and fullFormattedText.
   });
 });
 
-// 3. AI Thumbnail Analyzer
+// 3. AI THUMBNAIL ANALYZER
+
 app.post('/api/gemini/analyze-thumbnail', async (req: Request, res: Response) => {
   const { imageBase64, mimeType = 'image/jpeg', videoTitle } = req.body;
 
@@ -272,7 +282,10 @@ app.post('/api/gemini/analyze-thumbnail', async (req: Request, res: Response) =>
 
   if (ai) {
     try {
-      const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+      const cleanBase64 = imageBase64.replace(
+        /^data:image\/\w+;base64,/,
+        ''
+      );
 
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
@@ -285,10 +298,15 @@ app.post('/api/gemini/analyze-thumbnail', async (req: Request, res: Response) =>
               },
             },
             {
-              text: `Analyze this YouTube thumbnail for "${videoTitle || 'Untitled'}".
-Return JSON containing overallScore, ratings, strengths, improvements,
+              text: `
+Analyze this YouTube thumbnail for "${videoTitle || 'Untitled'}".
+
+Return JSON containing:
+overallScore, ratings, strengths, improvements,
 verdict, timestampSafeZone and abTestRecommendation.
-Do not claim to know actual CTR from the image.`,
+
+Do not claim to know actual CTR from the image.
+`,
             },
           ],
         },
@@ -298,7 +316,11 @@ Do not claim to know actual CTR from the image.`,
       });
 
       const analysis = JSON.parse(response.text || '{}');
-      return res.json({ analysis, source: 'gemini-3.8-flash' });
+
+      return res.json({
+        analysis,
+        source: 'gemini-3.8-flash',
+      });
     } catch (err: any) {
       console.error('Gemini thumbnail analysis error:', err?.message || err);
     }
@@ -312,13 +334,14 @@ Do not claim to know actual CTR from the image.`,
       improvements: ['AI thumbnail analysis is currently unavailable.'],
       verdict: 'Connect Gemini AI to analyze this thumbnail.',
       timestampSafeZone: null,
-      abTestRecommendation: 'Try a version with clearer text and a stronger focal point.',
+      abTestRecommendation: 'Try clearer text and a stronger focal point.',
     },
     source: 'unavailable',
   });
 });
 
-// 4. AI Topic Research
+// 4. AI TOPIC RESEARCH
+
 app.post('/api/gemini/research-topics', async (req: Request, res: Response) => {
   const { niche, topic } = req.body;
   const target = topic || niche || 'Technology';
@@ -329,8 +352,11 @@ app.post('/api/gemini/research-topics', async (req: Request, res: Response) => {
         model: 'gemini-3.8-flash',
         contents: `
 Suggest 5 YouTube video ideas about "${target}".
-Return JSON array with topic, searchVolume, competition,
-velocityScore, contentGap, targetFormat and recommendedAngle.
+
+Return JSON array with:
+topic, searchVolume, competition, velocityScore,
+contentGap, targetFormat and recommendedAngle.
+
 Do not present estimated search demand or velocity as verified live data.
 `,
         config: {
@@ -339,6 +365,7 @@ Do not present estimated search demand or velocity as verified live data.
       });
 
       const opportunities = JSON.parse(response.text || '[]');
+
       return res.json({
         opportunities,
         source: 'gemini-3.8-flash',
@@ -369,6 +396,7 @@ Do not present estimated search demand or velocity as verified live data.
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || '';
+
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || '';
 
@@ -412,12 +440,17 @@ function createSessionCookie(payload: {
     throw new Error('TOKEN_ENCRYPTION_KEY is not configured correctly');
   }
 
-  const body = Buffer.from(JSON.stringify({
-    ...payload,
-    expiresAt: Date.now() + SESSION_MAX_AGE_SECONDS * 1000,
-  })).toString('base64url');
+  const body = Buffer.from(
+    JSON.stringify({
+      ...payload,
+      expiresAt: Date.now() + SESSION_MAX_AGE_SECONDS * 1000,
+    })
+  ).toString('base64url');
 
-  const signature = createHmac('sha256', Buffer.from(keyHex, 'hex'))
+  const signature = createHmac(
+    'sha256',
+    Buffer.from(keyHex, 'hex')
+  )
     .update(body)
     .digest('hex');
 
@@ -437,6 +470,7 @@ function readSession(req: Request): {
   }
 
   const separator = token.lastIndexOf('.');
+
   if (separator < 1) return null;
 
   const body = token.slice(0, separator);
@@ -444,7 +478,10 @@ function readSession(req: Request): {
 
   if (!/^[0-9a-f]{64}$/i.test(suppliedSignature)) return null;
 
-  const expectedSignature = createHmac('sha256', Buffer.from(keyHex, 'hex'))
+  const expectedSignature = createHmac(
+    'sha256',
+    Buffer.from(keyHex, 'hex')
+  )
     .update(body)
     .digest();
 
@@ -490,10 +527,15 @@ function requireYouTubeConfig(): void {
   if (!GOOGLE_REDIRECT_URI) missing.push('GOOGLE_REDIRECT_URI');
   if (!SUPABASE_URL) missing.push('SUPABASE_URL');
   if (!SUPABASE_SECRET_KEY) missing.push('SUPABASE_SECRET_KEY');
-  if (!process.env.TOKEN_ENCRYPTION_KEY) missing.push('TOKEN_ENCRYPTION_KEY');
+
+  if (!process.env.TOKEN_ENCRYPTION_KEY) {
+    missing.push('TOKEN_ENCRYPTION_KEY');
+  }
 
   if (missing.length) {
-    throw new Error(`Missing server environment variables: ${missing.join(', ')}`);
+    throw new Error(
+      `Missing server environment variables: ${missing.join(', ')}`
+    );
   }
 }
 
@@ -516,7 +558,9 @@ async function supabaseRequest(
   });
 }
 
-async function getStoredConnection(googleUserId: string): Promise<any | null> {
+async function getStoredConnection(
+  googleUserId: string
+): Promise<any | null> {
   const query =
     `youtube_connections?select=google_user_id,channel_id,channel_title,refresh_token_encrypted,scopes&google_user_id=eq.${encodeURIComponent(googleUserId)}&limit=1`;
 
@@ -524,32 +568,43 @@ async function getStoredConnection(googleUserId: string): Promise<any | null> {
 
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`Supabase read failed (${response.status}): ${detail}`);
+
+    throw new Error(
+      `Supabase read failed (${response.status}): ${detail}`
+    );
   }
 
   const rows = await response.json() as any[];
+
   return rows[0] || null;
 }
 
-async function refreshGoogleAccessToken(refreshToken: string): Promise<string> {
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      client_secret: GOOGLE_CLIENT_SECRET,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    }),
-  });
+async function refreshGoogleAccessToken(
+  refreshToken: string
+): Promise<string> {
+  const response = await fetch(
+    'https://oauth2.googleapis.com/token',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token',
+      }),
+    }
+  );
 
   const data = await response.json() as any;
 
   if (!response.ok || !data.access_token) {
     throw new Error(
-      data.error_description || data.error || 'Google token refresh failed'
+      data.error_description ||
+      data.error ||
+      'Google token refresh failed'
     );
   }
 
@@ -594,7 +649,10 @@ app.get('/api/youtube/connect', (req: Request, res: Response) => {
 
     return res.redirect(authorizationUrl.toString());
   } catch (error: any) {
-    console.error('YouTube connect setup failed:', error?.message || error);
+    console.error(
+      'YouTube connect setup failed:',
+      error?.message || error
+    );
 
     return res.status(500).send(
       'YouTube connection is not configured. Check the server environment variables.'
@@ -608,8 +666,14 @@ app.get('/api/youtube/callback', async (req: Request, res: Response) => {
   try {
     requireYouTubeConfig();
 
-    const code = typeof req.query.code === 'string' ? req.query.code : '';
-    const returnedState = typeof req.query.state === 'string' ? req.query.state : '';
+    const code = typeof req.query.code === 'string'
+      ? req.query.code
+      : '';
+
+    const returnedState = typeof req.query.state === 'string'
+      ? req.query.state
+      : '';
+
     const savedState = getCookie(req, OAUTH_STATE_COOKIE);
 
     clearCookie(res, OAUTH_STATE_COOKIE);
@@ -618,25 +682,33 @@ app.get('/api/youtube/callback', async (req: Request, res: Response) => {
       return res.redirect('/?youtube=cancelled');
     }
 
-    if (!code || !returnedState || !savedState || returnedState !== savedState) {
+    if (
+      !code ||
+      !returnedState ||
+      !savedState ||
+      returnedState !== savedState
+    ) {
       return res.status(400).send(
         'Google authorization could not be verified. Please try connecting again.'
       );
     }
 
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        code,
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        redirect_uri: GOOGLE_REDIRECT_URI,
-        grant_type: 'authorization_code',
-      }),
-    });
+    const tokenResponse = await fetch(
+      'https://oauth2.googleapis.com/token',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          code,
+          client_id: GOOGLE_CLIENT_ID,
+          client_secret: GOOGLE_CLIENT_SECRET,
+          redirect_uri: GOOGLE_REDIRECT_URI,
+          grant_type: 'authorization_code',
+        }),
+      }
+    );
 
     const tokenData = await tokenResponse.json() as any;
 
@@ -669,7 +741,9 @@ app.get('/api/youtube/callback', async (req: Request, res: Response) => {
     const identity = await identityResponse.json() as any;
 
     if (!identityResponse.ok || !identity.sub) {
-      return res.status(502).send('Google account identity could not be verified.');
+      return res.status(502).send(
+        'Google account identity could not be verified.'
+      );
     }
 
     const channelResponse = await fetch(
@@ -697,10 +771,13 @@ app.get('/api/youtube/callback', async (req: Request, res: Response) => {
     const channel = channelData.items?.[0];
 
     if (!channel?.id) {
-      return res.status(404).send('No YouTube channel was found.');
+      return res.status(404).send(
+        'No YouTube channel was found for this Google account.'
+      );
     }
 
     const encryptedRefreshToken = encryptToken(tokenData.refresh_token);
+
     const scopes = typeof tokenData.scope === 'string'
       ? tokenData.scope.split(' ')
       : [];
@@ -725,10 +802,15 @@ app.get('/api/youtube/callback', async (req: Request, res: Response) => {
 
     if (!saveResponse.ok) {
       const detail = await saveResponse.text();
-      console.error('Supabase connection save failed:', detail);
+
+      console.error(
+        'Supabase connection save failed:',
+        saveResponse.status,
+        detail
+      );
 
       return res.status(502).send(
-        'CreatorPulse could not save the secure YouTube connection.'
+        'Your YouTube channel was found, but CreatorPulse could not save the secure connection.'
       );
     }
 
@@ -745,15 +827,18 @@ app.get('/api/youtube/callback', async (req: Request, res: Response) => {
 
     return res.redirect('/?youtube=connected');
   } catch (error: any) {
-    console.error('YouTube OAuth callback failed:', error?.message || error);
+    console.error(
+      'YouTube OAuth callback failed:',
+      error?.message || error
+    );
 
     return res.status(500).send(
-      'Something went wrong while connecting YouTube. Check the server logs.'
+      'Something went wrong while connecting YouTube. Check the Render logs for details.'
     );
   }
 });
 
-// -------------------- YOUTUBE CONNECTION STATUS --------------------
+// -------------------- YOUTUBE STATUS --------------------
 
 app.get('/api/youtube/status', (req: Request, res: Response) => {
   const session = readSession(req);
@@ -769,23 +854,30 @@ app.get('/api/youtube/status', (req: Request, res: Response) => {
   });
 });
 
-// -------------------- YOUTUBE CHANNEL DETAILS --------------------
+// -------------------- YOUTUBE CHANNEL --------------------
 
 app.get('/api/youtube/channel', async (req: Request, res: Response) => {
   try {
     const session = readSession(req);
 
     if (!session) {
-      return res.status(401).json({ error: 'YouTube is not connected' });
+      return res.status(401).json({
+        error: 'YouTube is not connected',
+      });
     }
 
     const connection = await getStoredConnection(session.googleUserId);
 
     if (!connection) {
-      return res.status(404).json({ error: 'YouTube connection was not found' });
+      return res.status(404).json({
+        error: 'YouTube connection was not found',
+      });
     }
 
-    const refreshToken = decryptToken(connection.refresh_token_encrypted);
+    const refreshToken = decryptToken(
+      connection.refresh_token_encrypted
+    );
+
     const accessToken = await refreshGoogleAccessToken(refreshToken);
 
     const response = await fetch(
@@ -808,7 +900,9 @@ app.get('/api/youtube/channel', async (req: Request, res: Response) => {
     const channel = data.items?.[0];
 
     if (!channel) {
-      return res.status(404).json({ error: 'YouTube channel was not found' });
+      return res.status(404).json({
+        error: 'YouTube channel was not found',
+      });
     }
 
     return res.json({
@@ -827,11 +921,16 @@ app.get('/api/youtube/channel', async (req: Request, res: Response) => {
           : Number(channel.statistics?.subscriberCount || 0),
         viewCount: Number(channel.statistics?.viewCount || 0),
         videoCount: Number(channel.statistics?.videoCount || 0),
-        hiddenSubscriberCount: Boolean(channel.statistics?.hiddenSubscriberCount),
+        hiddenSubscriberCount: Boolean(
+          channel.statistics?.hiddenSubscriberCount
+        ),
       },
     });
   } catch (error: any) {
-    console.error('YouTube channel request failed:', error?.message || error);
+    console.error(
+      'YouTube channel request failed:',
+      error?.message || error
+    );
 
     return res.status(500).json({
       error: 'Could not load YouTube channel data',
@@ -846,16 +945,23 @@ app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
     const session = readSession(req);
 
     if (!session) {
-      return res.status(401).json({ error: 'YouTube is not connected' });
+      return res.status(401).json({
+        error: 'YouTube is not connected',
+      });
     }
 
     const connection = await getStoredConnection(session.googleUserId);
 
     if (!connection) {
-      return res.status(404).json({ error: 'YouTube connection was not found' });
+      return res.status(404).json({
+        error: 'YouTube connection was not found',
+      });
     }
 
-    const refreshToken = decryptToken(connection.refresh_token_encrypted);
+    const refreshToken = decryptToken(
+      connection.refresh_token_encrypted
+    );
+
     const accessToken = await refreshGoogleAccessToken(refreshToken);
 
     const endDate = new Date();
@@ -864,12 +970,13 @@ app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
     const startDate = new Date(endDate);
     startDate.setUTCDate(startDate.getUTCDate() - 27);
 
-    const formatDate = (date: Date) => date.toISOString().slice(0, 10);
+    const formatDate = (date: Date) =>
+      date.toISOString().slice(0, 10);
 
     const start = formatDate(startDate);
     const end = formatDate(endDate);
 
-    // Fetch any requested YouTube Analytics report.
+    // Shared YouTube Analytics API report function.
     const fetchAnalyticsReport = async (
       dimensions: string,
       metrics: string,
@@ -897,7 +1004,8 @@ app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
 
       if (!response.ok) {
         throw new Error(
-          data.error?.message || `Analytics request failed (${response.status})`
+          data.error?.message ||
+          `YouTube Analytics request failed (${response.status})`
         );
       }
 
@@ -907,7 +1015,7 @@ app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
       };
     };
 
-    // Daily, traffic-source and country reports run independently.
+    // Request three reports independently.
     const [dailyResult, trafficResult, geographyResult] =
       await Promise.allSettled([
         fetchAnalyticsReport(
@@ -915,11 +1023,13 @@ app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
           'views,estimatedMinutesWatched,averageViewDuration,subscribersGained,subscribersLost',
           'day'
         ),
+
         fetchAnalyticsReport(
           'insightTrafficSourceType',
           'views,estimatedMinutesWatched',
           '-views'
         ),
+
         fetchAnalyticsReport(
           'country',
           'views,estimatedMinutesWatched',
@@ -927,10 +1037,10 @@ app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
         ),
       ]);
 
-    // Daily analytics are essential for the existing dashboard.
+    // The original daily report is required by the dashboard.
     if (dailyResult.status === 'rejected') {
       console.error(
-        'Daily Analytics failed:',
+        'Daily YouTube Analytics request failed:',
         dailyResult.reason?.message || dailyResult.reason
       );
 
@@ -939,6 +1049,8 @@ app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
       });
     }
 
+    // Return individual report availability without breaking
+    // the main daily analytics response.
     const getReport = (
       result: PromiseSettledResult<any>,
       reportName: string
@@ -968,8 +1080,15 @@ app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
       columnHeaders: dailyResult.value.columnHeaders,
       rows: dailyResult.value.rows,
 
-      trafficSources: getReport(trafficResult, 'Traffic sources'),
-      geography: getReport(geographyResult, 'Audience geography'),
+      trafficSources: getReport(
+        trafficResult,
+        'Traffic sources'
+      ),
+
+      geography: getReport(
+        geographyResult,
+        'Audience geography'
+      ),
 
       startDate: start,
       endDate: end,
@@ -977,7 +1096,10 @@ app.get('/api/youtube/analytics', async (req: Request, res: Response) => {
       note: 'YouTube Analytics reports use available data for the last 28 days. Some reports may be delayed or unavailable.',
     });
   } catch (error: any) {
-    console.error('YouTube Analytics request failed:', error?.message || error);
+    console.error(
+      'YouTube Analytics request failed:',
+      error?.message || error
+    );
 
     return res.status(500).json({
       error: 'Could not load YouTube Analytics data',
@@ -1008,6 +1130,7 @@ app.post('/api/youtube/disconnect', async (req: Request, res: Response) => {
 
     if (!response.ok) {
       const detail = await response.text();
+
       console.error('Supabase disconnect failed:', detail);
 
       return res.status(502).json({
@@ -1017,9 +1140,14 @@ app.post('/api/youtube/disconnect', async (req: Request, res: Response) => {
 
     clearCookie(res, SESSION_COOKIE);
 
-    return res.json({ connected: false });
+    return res.json({
+      connected: false,
+    });
   } catch (error: any) {
-    console.error('YouTube disconnect failed:', error?.message || error);
+    console.error(
+      'YouTube disconnect failed:',
+      error?.message || error
+    );
 
     return res.status(500).json({
       error: 'Could not disconnect YouTube',
