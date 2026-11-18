@@ -1,3 +1,4 @@
+
 import React from 'react';
 import {
   LayoutDashboard,
@@ -12,10 +13,9 @@ import {
   Sparkles,
   Zap,
   ChevronRight,
-  Tv,
-  Menu,
   X,
-  ShieldCheck,
+  CheckCircle,
+  Info,
 } from 'lucide-react';
 import { PageId, ChannelProfile } from '../../types';
 
@@ -36,6 +36,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setIsMobileOpen,
   hasGeminiKey,
 }) => {
+  const isYouTubeChannel = channel.dataSource === 'youtube';
+
   const navItems = [
     {
       id: 'dashboard' as PageId,
@@ -100,6 +102,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const content = (
     <div className="flex flex-col h-full bg-[#080b16] border-r border-slate-800/80 text-slate-300 w-72 select-none">
+
       {/* Brand Header */}
       <div className="p-5 border-b border-slate-800/70 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -107,6 +110,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Zap className="w-5 h-5 text-white animate-pulse" />
             <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 rounded-full border-2 border-[#080b16]" />
           </div>
+
           <div>
             <div className="flex items-center gap-1.5">
               <span className="font-extrabold text-lg tracking-tight text-white">
@@ -130,7 +134,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
       </div>
 
-      {/* Connected Channel Card (Demo Banner) */}
+      {/* Connected Channel Card */}
       <div className="px-4 py-3 border-b border-slate-800/60 bg-gradient-to-b from-[#0c1022] to-transparent">
         <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center gap-3">
           <img
@@ -138,23 +142,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
             alt={channel.name}
             className="w-10 h-10 rounded-full object-cover ring-2 ring-purple-500/40"
           />
+
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1">
-              <p className="text-xs font-semibold text-white truncate">{channel.name}</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-xs font-semibold text-white truncate">
+                {channel.name}
+              </p>
             </div>
-            <p className="text-[11px] text-slate-400 truncate">{channel.subscribersDisplay} subs</p>
+
+            <p className="text-[11px] text-slate-400 truncate">
+              {channel.subscribersDisplay} subs
+            </p>
+
+            <div className="flex items-center gap-1 mt-1">
+              {isYouTubeChannel ? (
+                <>
+                  <CheckCircle className="w-3 h-3 text-green-400" />
+                  <span className="text-[10px] text-green-400 font-medium">
+                    YouTube Connected
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Info className="w-3 h-3 text-purple-400" />
+                  <span className="text-[10px] text-purple-300 font-medium">
+                    Demo Profile
+                  </span>
+                </>
+              )}
+            </div>
           </div>
+
           <button
             onClick={() => handleItemClick('settings')}
-            title="Switch demo channel"
+            title="Manage channel settings"
             className="text-[10px] font-medium px-2 py-1 rounded bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 border border-purple-500/20 transition-colors"
           >
-            Demo
+            Manage
           </button>
         </div>
       </div>
 
-      {/* Nav links */}
+      {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         <div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
           Platform Suite
@@ -184,6 +213,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                   <Icon className="w-4 h-4" />
                 </div>
+
                 <span>{item.label}</span>
               </div>
 
@@ -194,6 +224,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     AI
                   </span>
                 )}
+
                 {item.badge && (
                   <span
                     className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full border ${item.badgeColor}`}
@@ -201,21 +232,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {item.badge}
                   </span>
                 )}
-                {isActive && <ChevronRight className="w-3.5 h-3.5 text-purple-400" />}
+
+                {isActive && (
+                  <ChevronRight className="w-3.5 h-3.5 text-purple-400" />
+                )}
               </div>
             </button>
           );
         })}
       </nav>
 
-      {/* AI Intelligence Engine Status */}
+      {/* Gemini AI Status */}
       <div className="p-4 border-t border-slate-800/80 bg-[#090d1e]">
         <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="text-xs font-semibold text-slate-200">Gemini 3.8 Flash</span>
+              <span className="text-xs font-semibold text-slate-200">
+                Gemini AI
+              </span>
             </div>
+
             <span
               className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
                 hasGeminiKey
@@ -223,11 +260,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
               }`}
             >
-              {hasGeminiKey ? 'Active' : 'Optimized'}
+              {hasGeminiKey ? 'Active' : 'Not Configured'}
             </span>
           </div>
+
           <p className="text-[11px] text-slate-400 leading-relaxed">
-            Multi-modal vision & predictive CTR neural scoring ready.
+            {hasGeminiKey
+              ? 'Gemini AI is configured for supported content-generation features.'
+              : 'Add your Gemini API key in the server settings to enable AI features.'}
           </p>
         </div>
       </div>
@@ -248,6 +288,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
             onClick={() => setIsMobileOpen(false)}
           />
+
           <div className="relative flex-1 flex flex-col max-w-xs w-full bg-[#080b16] z-50">
             {content}
           </div>
